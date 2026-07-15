@@ -50,9 +50,16 @@ struct BrightSync: ParsableCommand {
     @Option(name: .customLong("set-internal"), help: "Set built-in brightness (0.0-1.0) and exit. Mainly for testing the sync loop.")
     var setInternal: Double?
 
+    @Option(name: .customLong("set-external"), help: "Write luminance percent (0-100) to all external displays and exit. The next brightness change re-syncs over it.")
+    var setExternal: Double?
+
     func run() throws {
         if let value = setInternal {
             try runSetInternal(value)
+            return
+        }
+        if let value = setExternal {
+            try runSetExternal(value)
             return
         }
         if list {
@@ -94,6 +101,25 @@ struct BrightSync: ParsableCommand {
                 print("external display #\(index + 1): luminance \(luminance.current)/\(luminance.max)")
             } else {
                 print("external display #\(index + 1): no DDC response")
+            }
+        }
+    }
+
+    private func runSetExternal(_ percent: Double) throws {
+        guard (0...100).contains(percent) else {
+            throw ValidationError("--set-external expects a value between 0 and 100")
+        }
+        let services = DDC.externalServices()
+        guard !services.isEmpty else {
+            throw ValidationError("no external DDC displays found")
+        }
+        for (index, service) in services.enumerated() {
+            let maxLuminance = DDC.readLuminance(service)?.max ?? 100
+            let value = Int((percent / 100 * Double(maxLuminance)).rounded())
+            if DDC.writeLuminance(service, value: value) {
+                print("external display #\(index + 1): luminance -> \(value)/\(maxLuminance)")
+            } else {
+                print("external display #\(index + 1): DDC write failed")
             }
         }
     }
