@@ -19,14 +19,13 @@ working exactly as they do on the built-in display (see
 ## Install
 
 ```sh
-brew install --cask --no-quarantine pszypowicz/tap/brightsync
+brew install --cask pszypowicz/tap/brightsync
 ```
 
 The cask installs `Brightsync.app` and registers its launch-at-login agent
 (SMAppService) - the app appears with its icon under System Settings >
 General > Login Items & Extensions. Grant it Accessibility when prompted so
-the clamshell brightness keys work. `--no-quarantine` is required because
-releases are not notarized.
+the clamshell brightness keys work.
 
 To build and install from source instead:
 
