@@ -1,5 +1,7 @@
 # brightsync
 
+<img src="Packaging/AppIcon.png" alt="Brightsync icon" width="120" align="right">
+
 Mirror the built-in display brightness of an Apple Silicon Mac to external
 displays over DDC/CI.
 
@@ -9,15 +11,50 @@ immediately. No menu bar app, no polling: the daemon receives the same
 notification the system UI uses and pushes the mapped luminance straight to
 the display over I2C.
 
+Clamshell mode is covered too: with the lid closed the daemon handles the
+brightness keys itself and shows a brightness overlay, so the keys keep
+working exactly as they do on the built-in display (see
+[Clamshell mode](#clamshell-mode)).
+
 ## Install
 
 ```sh
-brew install pszypowicz/tap/brightsync
-brew services start brightsync
+brew install --cask --no-quarantine pszypowicz/tap/brightsync
 ```
 
-`brew services` registers it as a login launch agent. Run `brightsync
---verbose` in a terminal instead if you want to watch it work.
+The cask installs `Brightsync.app` and registers its launch-at-login agent
+(SMAppService) - the app appears with its icon under System Settings >
+General > Login Items & Extensions. Grant it Accessibility when prompted so
+the clamshell brightness keys work. `--no-quarantine` is required because
+releases are not notarized.
+
+To build and install from source instead:
+
+```sh
+scripts/install-app.sh --sign "<code-signing identity>"
+```
+
+Manage launch at login any time with:
+
+```sh
+/Applications/Brightsync.app/Contents/MacOS/brightsync --autostart status
+```
+
+(`enable` and `disable` likewise.) For a `brightsync` command on your PATH,
+symlink the app binary:
+
+```sh
+sudo ln -sf /Applications/Brightsync.app/Contents/MacOS/brightsync /usr/local/bin/brightsync
+```
+
+The daemon logs to the unified log:
+
+```sh
+log stream --predicate 'subsystem == "cz.szypowi.brightsync"'
+```
+
+Run `brightsync --verbose` in a terminal instead if you want to watch it
+work.
 
 ## Usage
 
@@ -28,21 +65,27 @@ brightsync --once              sync once and exit
 brightsync --set-external 40   write luminance percent (0-100) to all
                                external displays and exit; the next
                                brightness change re-syncs over it
+brightsync --autostart status  launch at login: status, enable, disable
+                               (works from the installed app only)
 brightsync --help              all flags
 ```
 
 ## Configuration
 
 Flags or `~/.config/brightsync/config.json` (flags win). The service reads
-the file at startup; restart it after editing
-(`brew services restart brightsync`).
+the file at startup; restart it after editing:
+
+```sh
+launchctl kickstart -k gui/$UID/cz.szypowi.brightsync
+```
 
 ```json
 {
   "min": 10,
   "max": 100,
   "gamma": 1.4,
-  "intervalMs": 50
+  "intervalMs": 50,
+  "clamshellKeys": true
 }
 ```
 
@@ -56,11 +99,44 @@ the file at startup; restart it after editing
   bursts (macOS ramps smoothly), so writes are coalesced to the most recent
   value at this rate. Raise it if your display is flaky under rapid DDC
   traffic.
+- `clamshellKeys` - handle the brightness keys while the lid is closed
+  (default `true`, see [Clamshell mode](#clamshell-mode)). Set to `false` or
+  pass `--no-clamshell-keys` to disable.
+
+## Clamshell mode
+
+With the lid closed the built-in panel goes offline and macOS drops
+brightness key presses entirely: no change, no notification, no bezel. The
+daemon covers this itself - an event tap picks up the brightness keys, steps
+a virtual brightness through the same mapping curve, writes it to the
+external displays, and shows a short-lived overlay: a sun icon that
+distinguishes brightening from darkening plus the luminance percentage,
+drawn with Liquid Glass on macOS 26. Option+Shift+key gives fine quarter
+steps, matching the built-in display. Opening the lid hands the keys
+straight back to macOS.
+
+- The overlay is drawn by the daemon itself. The native macOS bezel is not
+  usable: on macOS 26 the private OSD framework stopped rendering fill
+  levels for third-party callers (MonitorControl/MonitorControl#1782).
+- Requires the Accessibility permission (System Settings > Privacy &
+  Security > Accessibility). The daemon prompts on first start and picks the
+  grant up the moment it is made; everything else works without it.
+- Build with a stable code-signing identity (`scripts/install-app.sh --sign
+"<identity>"`, e.g. a Developer ID or a self-signed code-signing
+  certificate). Ad-hoc builds pin both the Accessibility grant and the
+  SMAppService launch constraint to the exact binary, so every rebuild
+  requires re-granting and can leave launchd refusing to spawn the agent.
+- If a display macOS controls natively is online (Apple Studio Display, Pro
+  Display XDR), key presses are passed through even in clamshell so native
+  control keeps working.
+- The starting value is the last brightness seen before the lid closed; when
+  the daemon starts already in clamshell it is derived from the luminance
+  the display reports.
 
 ## Requirements and limitations
 
-- Apple Silicon only. The DDC transport used here is the Apple DCP I2C
-  service; Intel Macs need a different mechanism (see
+- Apple Silicon and macOS 26 or newer. The DDC transport used here is the
+  Apple DCP I2C service; Intel Macs need a different mechanism (see
   [ddcctl](https://github.com/kfix/ddcctl)).
 - The display must have DDC/CI enabled (usually an OSD menu setting, on by
   default on most displays).
@@ -70,8 +146,8 @@ the file at startup; restart it after editing
   macOS and are ignored by this tool.
 - All external displays receive the same mapped value.
 - Uses private macOS APIs (DisplayServices brightness notifications,
-  IOAVService I2C). These have been stable for years and are what the popular
-  brightness utilities use, but a macOS update could break them.
+  IOAVService I2C). These have been stable for years and are what the
+  popular brightness utilities use, but a macOS update could break them.
 
 ## How it works
 
@@ -83,15 +159,24 @@ the file at startup; restart it after editing
 3. `IOAVServiceWriteI2C` (IOKit) writes the DDC/CI luminance VCP (0x10) to
    every `DCPAVServiceProxy` IORegistry entry located `External`.
 4. Display hotplug, sleep/wake, and clamshell transitions trigger a debounced
-   re-discovery and re-sync.
+   re-discovery and re-sync, driven by IOKit notifications: general-interest
+   messages from `IOPMrootDomain` (lid state via `AppleClamshellState`, wake
+   from sleep) and first-match/terminate events for `DCPAVServiceProxy`
+   (display attach/detach). The CG reconfiguration callback is not reliably
+   delivered to a launchd agent, so it is not used.
+5. In clamshell mode (no built-in display online) an active CGEvent tap
+   captures the brightness key events, a virtual brightness is stepped
+   through the same mapping, and the daemon draws a short-lived overlay with
+   the step direction and percentage.
 
 ## Acknowledgments
 
 The DDC/CI-over-DCP technique comes from
-[m1ddc](https://github.com/waydabber/m1ddc), and the DisplayServices
+[m1ddc](https://github.com/waydabber/m1ddc), the DisplayServices
 notification approach from
 [MonitorControl](https://github.com/MonitorControl/MonitorControl) and
-[Lunar](https://github.com/alin23/Lunar). If you want a GUI and per-display
+[Lunar](https://github.com/alin23/Lunar), and the IOKit lid and hotplug
+notification approach from Lunar. If you want a GUI and per-display
 control, use those excellent apps instead.
 
 ## License

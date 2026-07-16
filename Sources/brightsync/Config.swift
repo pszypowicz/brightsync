@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Effective settings after merging defaults, the optional config file, and
 /// CLI flags (flags win).
@@ -6,13 +7,15 @@ import Foundation
 /// The config file lives at $XDG_CONFIG_HOME/brightsync/config.json (default
 /// ~/.config/brightsync/config.json) so the daemon stays configurable when
 /// launched by launchd, where flags are impractical. Recognized keys: "min",
-/// "max", "gamma", "intervalMs". A missing file is fine; a malformed one is a
-/// fatal error so a typo never silently reverts to defaults.
+/// "max", "gamma", "intervalMs", "clamshellKeys". A missing file is fine; a
+/// malformed one is a fatal error so a typo never silently reverts to
+/// defaults.
 struct Config {
     var min: Double = 0
     var max: Double = 100
     var gamma: Double = 1.0
     var intervalMs: Int = 50
+    var clamshellKeys: Bool = true
 
     struct ConfigError: Error, CustomStringConvertible {
         let description: String
@@ -23,6 +26,7 @@ struct Config {
         var max: Double?
         var gamma: Double?
         var intervalMs: Int?
+        var clamshellKeys: Bool?
     }
 
     static func filePath() -> URL {
@@ -31,7 +35,9 @@ struct Config {
         return base.appendingPathComponent("brightsync/config.json")
     }
 
-    static func load(min: Double?, max: Double?, gamma: Double?, intervalMs: Int?) throws -> Config {
+    static func load(
+        min: Double?, max: Double?, gamma: Double?, intervalMs: Int?, clamshellKeys: Bool?
+    ) throws -> Config {
         var config = Config()
 
         let url = filePath()
@@ -46,12 +52,14 @@ struct Config {
             config.max = values.max ?? config.max
             config.gamma = values.gamma ?? config.gamma
             config.intervalMs = values.intervalMs ?? config.intervalMs
+            config.clamshellKeys = values.clamshellKeys ?? config.clamshellKeys
         }
 
         config.min = min ?? config.min
         config.max = max ?? config.max
         config.gamma = gamma ?? config.gamma
         config.intervalMs = intervalMs ?? config.intervalMs
+        config.clamshellKeys = clamshellKeys ?? config.clamshellKeys
 
         guard (0...100).contains(config.min), (0...100).contains(config.max), config.min < config.max else {
             throw ConfigError(description: "min/max must satisfy 0 <= min < max <= 100 (got \(config.min)/\(config.max))")
@@ -71,6 +79,15 @@ struct Config {
         let clamped = Swift.min(Swift.max(brightness, 0), 1)
         return min + (max - min) * pow(clamped, gamma)
     }
+
+    /// Inverse of luminancePercent: the internal brightness that maps to a
+    /// given external luminance percentage. Seeds the virtual brightness when
+    /// the daemon starts in clamshell mode and the only known value is what
+    /// the display reports.
+    func internalBrightness(forLuminancePercent percent: Double) -> Double {
+        let clamped = Swift.min(Swift.max(percent, min), max)
+        return pow((clamped - min) / (max - min), 1 / gamma)
+    }
 }
 
 private let logTimestampFormatter: ISO8601DateFormatter = {
@@ -79,7 +96,13 @@ private let logTimestampFormatter: ISO8601DateFormatter = {
     return formatter
 }()
 
+private let systemLogger = Logger(subsystem: Autostart.label, category: "daemon")
+
+/// Logs to stdout for foreground runs and to the unified log for the launchd
+/// agent, whose stdout goes nowhere. Messages are marked public - nothing
+/// sensitive is logged and redacted lines are useless for debugging.
 func log(_ message: String) {
     print("\(logTimestampFormatter.string(from: Date())) \(message)")
     fflush(stdout)
+    systemLogger.notice("\(message, privacy: .public)")
 }

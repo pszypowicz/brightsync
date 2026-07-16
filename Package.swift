@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "brightsync",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS("26.0")],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
     ],

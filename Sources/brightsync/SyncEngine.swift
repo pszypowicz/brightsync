@@ -10,6 +10,12 @@ import Foundation
 /// smoothly, so one key press yields many events). Writes are coalesced: only
 /// the most recent value is kept, and consecutive DDC transactions are spaced
 /// by at least `intervalMs` so the I2C bus is never flooded.
+///
+/// In clamshell mode there is nothing to mirror - the built-in panel is
+/// offline and macOS drops brightness key presses entirely - so the engine
+/// owns a virtual brightness instead: ClamshellKeyTap feeds key presses to
+/// stepBrightness, which walks the last known value in native-sized steps
+/// through the same write path.
 final class SyncEngine {
     /// Notification callbacks are C function pointers without context, so the
     /// engine is reachable through this global. Set once at startup.
@@ -19,6 +25,9 @@ final class SyncEngine {
         let service: IOAVService
         let maxLuminance: Int
         var lastWritten: Int?
+        /// Set while writes fail so the failure and the recovery are logged
+        /// once each instead of once per keypress.
+        var failing = false
     }
 
     private let config: Config
@@ -29,6 +38,14 @@ final class SyncEngine {
     private var draining = false
     private var targets: [Target] = []
     private var builtin: CGDirectDisplayID?
+    /// Last internal brightness seen or virtually stepped; the starting point
+    /// for clamshell brightness key presses.
+    private var lastBrightness: Double?
+    /// True when brightness keys should be handled here instead of by macOS:
+    /// the feature is enabled, the built-in panel is offline, no online
+    /// display offers native brightness control, and there is at least one
+    /// DDC target to drive.
+    private var clamshellActive = false
     // Registration state; touched only on the main queue.
     private var registeredObserver: CGDirectDisplayID?
     private var rescanWork: DispatchWorkItem?
@@ -75,10 +92,33 @@ final class SyncEngine {
         }
     }
 
+    /// Whether brightness key events should be consumed instead of passed on
+    /// to macOS. Cheap enough for an event-tap callback.
+    var handlesBrightnessKeys: Bool {
+        lock.withLock { clamshellActive }
+    }
+
+    /// Steps the virtual brightness for a clamshell key press: native-sized
+    /// steps (1/16, or 1/64 with Option+Shift) snapped to the step grid,
+    /// written like any other brightness change, with the system bezel as
+    /// feedback.
+    func stepBrightness(up: Bool, fine: Bool) {
+        let step = fine ? 1.0 / 64 : 1.0 / 16
+        let current = lock.withLock { lastBrightness } ?? 0.5
+        let position = (current / step).rounded() + (up ? 1 : -1)
+        let value = Swift.min(Swift.max(position * step, 0), 1)
+        submit(value)
+        BrightnessHUD.show(
+            percent: config.luminancePercent(forInternal: value),
+            brightening: up,
+            on: CGMainDisplayID())
+    }
+
     /// New internal brightness value from a notification.
     func submit(_ brightness: Double) {
         if verbose { log("event: internal brightness \(String(format: "%.4f", brightness))") }
         lock.lock()
+        lastBrightness = brightness
         pending = brightness
         let shouldDrain = !draining
         if shouldDrain { draining = true }
@@ -101,6 +141,7 @@ final class SyncEngine {
         DispatchQueue.main.async {
             self.rescanWork?.cancel()
             let work = DispatchWorkItem {
+                log("rescanning after display change")
                 self.queue.async {
                     self.rescanLocked()
                     self.syncCurrentLocked()
@@ -118,24 +159,59 @@ final class SyncEngine {
         let builtinDisplay = DisplayServices.builtinDisplay()
         let services = DDC.externalServices()
         var newTargets: [Target] = []
+        var externalBrightness: Double?
         for service in services {
             let luminance = DDC.readLuminance(service)
-            if luminance == nil {
+            if let luminance {
+                if externalBrightness == nil {
+                    externalBrightness = config.internalBrightness(
+                        forLuminancePercent: Double(luminance.current) / Double(luminance.max) * 100)
+                }
+            } else {
                 log("warning: external display does not answer DDC luminance read; assuming max 100")
             }
             newTargets.append(Target(service: service, maxLuminance: luminance?.max ?? 100, lastWritten: nil))
         }
+        let nativeControl = Self.nativeBrightnessControlOnline()
         lock.lock()
         builtin = builtinDisplay
         targets = newTargets
+        if lastBrightness == nil { lastBrightness = externalBrightness }
+        clamshellActive = config.clamshellKeys && builtinDisplay == nil
+            && !nativeControl && !newTargets.isEmpty
+        let active = clamshellActive
         lock.unlock()
         log("displays: built-in \(builtinDisplay.map(String.init) ?? "none"), \(newTargets.count) external DDC target(s)")
+        if active {
+            log("clamshell mode: brightness keys drive the external displays")
+        }
+    }
+
+    /// True when any online display is brightness-controllable by macOS
+    /// itself (built-in panel, Apple displays). The system then handles the
+    /// keys and shows its own bezel, so ours must stay out of the way.
+    private static func nativeBrightnessControlOnline() -> Bool {
+        guard let canChange = DisplayServices.canChangeBrightness else { return false }
+        return onlineDisplays().contains { canChange($0) }
+    }
+
+    private static func onlineDisplays() -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        return Array(ids.prefix(Int(count)))
     }
 
     private func syncCurrentLocked() {
-        let display = lock.withLock { builtin }
-        guard let display, let brightness = DisplayServices.brightness(of: display) else { return }
-        write(brightness)
+        if let display = lock.withLock({ builtin }),
+            let brightness = DisplayServices.brightness(of: display) {
+            lock.withLock { lastBrightness = brightness }
+            write(brightness)
+        } else if let value = lock.withLock({ lastBrightness }) {
+            // Clamshell: push the virtual brightness so a display attached
+            // with the lid closed is aligned without waiting for a key press.
+            write(value)
+        }
     }
 
     private func drain() {
@@ -165,8 +241,13 @@ final class SyncEngine {
             guard current[index].lastWritten != value else { continue }
             if DDC.writeLuminance(current[index].service, value: value) {
                 current[index].lastWritten = value
+                if current[index].failing {
+                    current[index].failing = false
+                    log("ddc: writes recovered")
+                }
                 if verbose { log("ddc: luminance -> \(value)/\(current[index].maxLuminance)") }
-            } else if verbose {
+            } else if !current[index].failing {
+                current[index].failing = true
                 log("ddc: write failed (display asleep or DDC unavailable)")
             }
         }
@@ -192,10 +273,3 @@ let brightnessChangedCallback: CFNotificationCallback = { _, _, _, _, userInfo i
     }
 }
 
-let displayReconfigurationCallback: CGDisplayReconfigurationCallBack = { _, flags, _ in
-    let interesting: CGDisplayChangeSummaryFlags = [
-        .addFlag, .removeFlag, .enabledFlag, .disabledFlag, .desktopShapeChangedFlag,
-    ]
-    guard !flags.intersection(interesting).isEmpty else { return }
-    SyncEngine.shared?.scheduleRescan()
-}

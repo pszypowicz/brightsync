@@ -11,19 +11,22 @@ struct BrightSync: ParsableCommand {
             Listens for built-in display brightness changes (keyboard, ambient \
             light sensor, Control Center) and immediately writes the mapped \
             luminance to every connected DDC-capable external display. \
-            Apple Silicon only.
+            With the lid closed the brightness keys are handled directly and \
+            a brightness overlay is shown, so they keep working in \
+            clamshell mode (requires Accessibility). Apple Silicon only.
 
             Settings may also come from \
             ~/.config/brightsync/config.json (keys: min, max, gamma, \
-            intervalMs); flags override the file.
+            intervalMs, clamshellKeys); flags override the file.
 
             Examples:
               brightsync                     run in the foreground
               brightsync --list              show displays and current values
               brightsync --once              sync once and exit
               brightsync --min 10 --gamma 1.4
+              brightsync --autostart status  launch-at-login state (installed app)
             """,
-        version: "0.1.1"
+        version: "0.2.0"
     )
 
     @Flag(help: "List displays and current values, then exit.")
@@ -34,6 +37,11 @@ struct BrightSync: ParsableCommand {
 
     @Flag(help: "Log every brightness event and DDC write.")
     var verbose = false
+
+    @Flag(
+        inversion: .prefixedNo,
+        help: "Handle brightness keys and show a brightness overlay while the lid is closed. On by default; needs Accessibility.")
+    var clamshellKeys: Bool?
 
     @Option(help: "External luminance (0-100) mapped to internal brightness 0.")
     var min: Double?
@@ -53,7 +61,14 @@ struct BrightSync: ParsableCommand {
     @Option(name: .customLong("set-external"), help: "Write luminance percent (0-100) to all external displays and exit. The next brightness change re-syncs over it.")
     var setExternal: Double?
 
+    @Option(help: "Manage launch at login (installed app only): enable, disable, or status.")
+    var autostart: AutostartAction?
+
     func run() throws {
+        if let autostart {
+            try Autostart.run(autostart)
+            return
+        }
         if let value = setInternal {
             try runSetInternal(value)
             return
@@ -67,15 +82,19 @@ struct BrightSync: ParsableCommand {
             return
         }
 
-        let config = try Config.load(min: min, max: max, gamma: gamma, intervalMs: intervalMs)
+        let config = try Config.load(
+            min: min, max: max, gamma: gamma, intervalMs: intervalMs, clamshellKeys: clamshellKeys)
         let engine = SyncEngine(config: config, verbose: verbose)
         SyncEngine.shared = engine
         engine.start()
         if once { return }
 
         engine.registerForNotifications()
-        CGDisplayRegisterReconfigurationCallback(displayReconfigurationCallback, nil)
-        log("brightsync \(Self.configuration.version) running (min \(config.min), max \(config.max), gamma \(config.gamma), interval \(config.intervalMs)ms)")
+        TopologyWatcher.start()
+        if config.clamshellKeys {
+            ClamshellKeyTap.start(verbose: verbose)
+        }
+        log("brightsync \(Self.configuration.version) running (min \(config.min), max \(config.max), gamma \(config.gamma), interval \(config.intervalMs)ms, clamshell keys \(config.clamshellKeys ? "on" : "off"))")
 
         while true {
             RunLoop.main.run(mode: .default, before: .distantFuture)
