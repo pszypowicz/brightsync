@@ -104,9 +104,9 @@ launchctl kickstart -k gui/$UID/cz.szypowi.brightsync
 
 ## Clamshell mode
 
-With the lid closed the built-in panel goes offline and macOS drops
-brightness key presses entirely: no change, no notification, no bezel. The
-daemon covers this itself - an event tap picks up the brightness keys, steps
+With the lid closed the built-in panel goes offline and macOS ignores the
+brightness keys. The daemon covers this itself - an event tap picks up the
+brightness keys, steps
 a virtual brightness through the same mapping curve, writes it to the
 external displays, and shows a short-lived overlay: a sun icon that
 distinguishes brightening from darkening plus the luminance percentage,
@@ -114,17 +114,12 @@ drawn with Liquid Glass on macOS 26. Option+Shift+key gives fine quarter
 steps, matching the built-in display. Opening the lid hands the keys
 straight back to macOS.
 
-- The overlay is drawn by the daemon itself. The native macOS bezel is not
-  usable: on macOS 26 the private OSD framework stopped rendering fill
-  levels for third-party callers (MonitorControl/MonitorControl#1782).
 - Requires the Accessibility permission (System Settings > Privacy &
   Security > Accessibility). The daemon prompts on first start and picks the
   grant up the moment it is made; everything else works without it.
-- Build with a stable code-signing identity (`scripts/install-app.sh --sign
-"<identity>"`, e.g. a Developer ID or a self-signed code-signing
-  certificate). Ad-hoc builds pin both the Accessibility grant and the
-  SMAppService launch constraint to the exact binary, so every rebuild
-  requires re-granting and can leave launchd refusing to spawn the agent.
+- Build from source with a stable code-signing identity
+  (`scripts/install-app.sh --sign "<identity>"`, e.g. a Developer ID or a
+  self-signed code-signing certificate).
 - If a display macOS controls natively is online (Apple Studio Display, Pro
   Display XDR), key presses are passed through even in clamshell so native
   control keeps working.
@@ -145,8 +140,7 @@ straight back to macOS.
   macOS and are ignored by this tool.
 - All external displays receive the same mapped value.
 - Uses private macOS APIs (DisplayServices brightness notifications,
-  IOAVService I2C). These have been stable for years and are what the
-  popular brightness utilities use, but a macOS update could break them.
+  IOAVService I2C), the same ones the popular brightness utilities build on.
 
 ## How it works
 
@@ -161,8 +155,7 @@ straight back to macOS.
    re-discovery and re-sync, driven by IOKit notifications: general-interest
    messages from `IOPMrootDomain` (lid state via `AppleClamshellState`, wake
    from sleep) and first-match/terminate events for `DCPAVServiceProxy`
-   (display attach/detach). The CG reconfiguration callback is not reliably
-   delivered to a launchd agent, so it is not used.
+   (display attach/detach).
 5. In clamshell mode (no built-in display online) an active CGEvent tap
    captures the brightness key events, a virtual brightness is stepped
    through the same mapping, and the daemon draws a short-lived overlay with
