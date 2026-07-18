@@ -1,3 +1,4 @@
+import AppKit
 import ArgumentParser
 import CoreGraphics
 import Foundation
@@ -8,25 +9,27 @@ struct BrightSync: ParsableCommand {
         commandName: "brightsync",
         abstract: "Mirror the built-in display brightness to external displays over DDC/CI.",
         discussion: """
-            Listens for built-in display brightness changes (keyboard, ambient \
-            light sensor, Control Center) and immediately writes the mapped \
-            luminance to every connected DDC-capable external display. \
-            With the lid closed the brightness keys are handled directly and \
-            a brightness overlay is shown, so they keep working in \
-            clamshell mode (requires Accessibility). Apple Silicon only.
+            Runs as a menu bar app: listens for built-in display brightness \
+            changes (keyboard, ambient light sensor, Control Center) and \
+            immediately writes the mapped luminance to every connected \
+            DDC-capable external display. With the lid closed the brightness \
+            keys are handled directly and a brightness overlay is shown, so \
+            they keep working in clamshell mode (requires Accessibility). \
+            Apple Silicon only.
 
-            Settings may also come from \
-            ~/.config/brightsync/config.json (keys: min, max, gamma, \
-            intervalMs, clamshellKeys); flags override the file.
+            Settings live in the Settings window, or equivalently the \
+            cz.szypowi.brightsync defaults domain (keys: min, max, gamma, \
+            intervalMs, clamshellKeys, showMenuBarIcon); changes apply \
+            immediately. Opening the app while it is already running shows \
+            Settings - the escape hatch when the menu bar icon is hidden.
 
             Examples:
-              brightsync                     run in the foreground
+              brightsync                     run the app in the foreground
               brightsync --list              show displays and current values
               brightsync --once              sync once and exit
-              brightsync --min 10 --gamma 1.4
-              brightsync --autostart status  launch-at-login state (installed app)
+              brightsync --set-external 40   one-off manual luminance write
             """,
-        version: "0.2.0"
+        version: "0.4.0"
     )
 
     @Flag(help: "List displays and current values, then exit.")
@@ -38,37 +41,17 @@ struct BrightSync: ParsableCommand {
     @Flag(help: "Log every brightness event and DDC write.")
     var verbose = false
 
-    @Flag(
-        inversion: .prefixedNo,
-        help: "Handle brightness keys and show a brightness overlay while the lid is closed. On by default; needs Accessibility.")
-    var clamshellKeys: Bool?
-
-    @Option(help: "External luminance (0-100) mapped to internal brightness 0.")
-    var min: Double?
-
-    @Option(help: "External luminance (0-100) mapped to internal brightness 1.")
-    var max: Double?
-
-    @Option(help: "Curve exponent applied to internal brightness before mapping.")
-    var gamma: Double?
-
-    @Option(name: .customLong("interval-ms"), help: "Minimum milliseconds between DDC writes.")
-    var intervalMs: Int?
-
     @Option(name: .customLong("set-internal"), help: "Set built-in brightness (0.0-1.0) and exit. Mainly for testing the sync loop.")
     var setInternal: Double?
 
     @Option(name: .customLong("set-external"), help: "Write luminance percent (0-100) to all external displays and exit. The next brightness change re-syncs over it.")
     var setExternal: Double?
 
-    @Option(help: "Manage launch at login (installed app only): enable, disable, or status.")
-    var autostart: AutostartAction?
+    /// NSApplication.delegate is unretained, so the shell keeps its delegate
+    /// alive here.
+    nonisolated(unsafe) private static var delegate: AppDelegate?
 
     func run() throws {
-        if let autostart {
-            try Autostart.run(autostart)
-            return
-        }
         if let value = setInternal {
             try runSetInternal(value)
             return
@@ -82,23 +65,26 @@ struct BrightSync: ParsableCommand {
             return
         }
 
-        let config = try Config.load(
-            min: min, max: max, gamma: gamma, intervalMs: intervalMs, clamshellKeys: clamshellKeys)
+        Config.registerDefaults()
+        let config: Config
+        do {
+            config = try Config.fromDefaults()
+        } catch {
+            log("error: \(error)")
+            throw ExitCode.failure
+        }
         let engine = SyncEngine(config: config, verbose: verbose)
         SyncEngine.shared = engine
-        engine.start()
-        if once { return }
-
-        engine.registerForNotifications()
-        TopologyWatcher.start()
-        if config.clamshellKeys {
-            ClamshellKeyTap.start(verbose: verbose)
+        if once {
+            engine.start()
+            return
         }
-        log("brightsync \(Self.configuration.version) running (min \(config.min), max \(config.max), gamma \(config.gamma), interval \(config.intervalMs)ms, clamshell keys \(config.clamshellKeys ? "on" : "off"))")
 
-        while true {
-            RunLoop.main.run(mode: .default, before: .distantFuture)
-        }
+        let app = NSApplication.shared
+        Self.delegate = AppDelegate(engine: engine, config: config, verbose: verbose)
+        app.delegate = Self.delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
     }
 
     private func runList() {

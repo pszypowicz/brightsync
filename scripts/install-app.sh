@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Installs Brightsync.app and enables its launch-at-login agent.
+# Installs BrightSync.app and starts it.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Install Brightsync.app and enable launch at login.
+Install BrightSync.app and start it.
 
-Builds the app (unless --skip-build), unregisters any previously installed
-copy, replaces it, and registers the embedded launchd agent through the new
-app (--autostart enable), which also starts it.
+Builds the app (unless --skip-build), quits any running copy, replaces it,
+and launches the new one in the background. The app registers launch at
+login itself on its first run; manage it later in Settings.
 
 Usage: scripts/install-app.sh [--app-dir <dir>] [--sign <identity>] [--skip-build] [-h|--help]
 
 Options:
   --app-dir <dir>    Install destination (default: /Applications)
   --sign <identity>  Code-signing identity passed to build-app.sh
-  --skip-build       Use the existing dist/Brightsync.app instead of rebuilding
+  --skip-build       Use the existing dist/BrightSync.app instead of rebuilding
   -h, --help         Show this help.
 
 Example:
@@ -47,29 +47,16 @@ if [[ $skip_build -eq 0 ]]; then
   build_args=(--output dist)
   [[ -n "$sign" ]] && build_args+=(--sign "$sign")
   scripts/build-app.sh "${build_args[@]}"
-elif [[ ! -d dist/Brightsync.app ]]; then
-  echo "error: dist/Brightsync.app not found; run without --skip-build first" >&2
+elif [[ ! -d dist/BrightSync.app ]]; then
+  echo "error: dist/BrightSync.app not found; run without --skip-build first" >&2
   exit 1
 fi
 
-app="$app_dir/Brightsync.app"
+app="$app_dir/BrightSync.app"
+pkill -x BrightSync 2> /dev/null || true
 rm -rf "$app"
-cp -R dist/Brightsync.app "$app"
+cp -R dist/BrightSync.app "$app"
+open -g "$app"
 
-# Refresh LaunchServices' record of the bundle: Background Task Management
-# resolves the agent's bundle-relative program through a bookmark that goes
-# stale when the app is replaced ("Could not find and/or execute program").
-lsregister="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-"$lsregister" -f "$app"
-
-# enable re-registers from scratch (see Autostart.swift), refreshing the
-# launch constraint Background Task Management pins to the registered binary.
-"$app/Contents/MacOS/brightsync" --autostart enable
-
-started() {
-  launchctl print "gui/$(id -u)/cz.szypowi.brightsync" 2> /dev/null | grep -q 'state = running'
-}
-for _ in 1 2 3 4 5 6 7 8; do started && break; sleep 1; done
-started || { echo "error: agent not running, check the logs" >&2; exit 1; }
 echo "installed $app"
 echo "logs: log stream --predicate 'subsystem == \"cz.szypowi.brightsync\"'"

@@ -1,28 +1,32 @@
 #!/usr/bin/env bash
-# Assembles Brightsync.app from the SwiftPM release build: binary, Info.plist
-# (version taken from the binary itself), icon, ad-hoc signature.
+# Assembles BrightSync.app from the SwiftPM release build: binary, Info.plist
+# (version taken from the binary itself), icon, hardened-runtime signature.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Build Brightsync.app from the SwiftPM release build.
+Build BrightSync.app from the SwiftPM release build.
 
 Usage: scripts/build-app.sh [--output <dir>] [--sign <identity>] [-h|--help]
 
 Options:
-  --output <dir>     Directory to place Brightsync.app in (default: dist)
-  --sign <identity>  Code-signing identity (default: "-", ad-hoc). A stable
-                     identity keeps TCC grants like Accessibility valid
-                     across rebuilds.
+  --output <dir>     Directory to place BrightSync.app in (default: dist)
+  --sign <identity>  Codesign identity, matched as a substring against
+                     'security find-identity' output (default: "Developer ID
+                     Application", the release identity - dev builds too, so
+                     TCC grants like Accessibility survive rebuilds). No
+                     fallback: a missing match is a hard error, never a
+                     silently different signature. Pass "adhoc" for an
+                     unsigned local build.
   -h, --help         Show this help.
 
 Example:
-  scripts/build-app.sh --sign "Brightsync Dev"
+  scripts/build-app.sh
 EOF
 }
 
 output="dist"
-sign="-"
+sign="Developer ID Application"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output)
@@ -40,16 +44,30 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 
 swift build -c release
-binary=".build/release/brightsync"
+binary=".build/release/BrightSync"
 version="$("$binary" --version)"
 
-app="$output/Brightsync.app"
+app="$output/BrightSync.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Library/LaunchAgents"
-cp "$binary" "$app/Contents/MacOS/brightsync"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "$binary" "$app/Contents/MacOS/BrightSync"
 sed "s/__VERSION__/$version/g" Packaging/Info.plist > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist" > /dev/null
 cp Packaging/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
-cp Packaging/cz.szypowi.brightsync.plist "$app/Contents/Library/LaunchAgents/"
-codesign --force --sign "$sign" --identifier cz.szypowi.brightsync "$app"
+if [[ "$sign" == "adhoc" ]]; then
+  codesign --force --sign - --options runtime --identifier cz.szypowi.brightsync "$app"
+else
+  # || true: with set -e, a failing security query (locked/absent keychain)
+  # would abort before the explicit error below.
+  identity="$(security find-identity -v -p codesigning | awk -v id="$sign" '$0 ~ id {print $2; exit}' || true)"
+  if [[ -z "$identity" ]]; then
+    echo "error: no codesigning identity matching '$sign'" >&2
+    echo "List identities with: security find-identity -v -p codesigning" >&2
+    echo "Pick one with --sign <substring>, or --sign adhoc for an unsigned dev build." >&2
+    exit 1
+  fi
+  # --timestamp: notarization requires a secure timestamp.
+  codesign --force --sign "$identity" --options runtime --timestamp \
+    --identifier cz.szypowi.brightsync "$app"
+fi
 echo "built $app (version $version)"
