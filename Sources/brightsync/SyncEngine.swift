@@ -30,7 +30,10 @@ final class SyncEngine {
         var failing = false
     }
 
-    private let config: Config
+    /// Swapped whole on settings changes; every consumer takes a snapshot
+    /// through the computed accessor, so reads are consistent per operation.
+    private var _config: Config
+    private var config: Config { lock.withLock { _config } }
     private let verbose: Bool
     private let queue = DispatchQueue(label: "brightsync.ddc")
     private let lock = NSLock()
@@ -51,8 +54,18 @@ final class SyncEngine {
     private var rescanWork: DispatchWorkItem?
 
     init(config: Config, verbose: Bool) {
-        self.config = config
+        self._config = config
         self.verbose = verbose
+    }
+
+    /// Applies new settings live: rescanning recomputes the clamshell state
+    /// and the sync re-pushes the current brightness through the new curve.
+    func update(config: Config) {
+        lock.withLock { _config = config }
+        queue.async {
+            self.rescanLocked()
+            self.syncCurrentLocked()
+        }
     }
 
     /// Discovers displays and pushes the current brightness. Blocks until the
@@ -156,6 +169,7 @@ final class SyncEngine {
     // MARK: - Work on the DDC queue
 
     private func rescanLocked() {
+        let config = self.config
         let builtinDisplay = DisplayServices.builtinDisplay()
         let services = DDC.externalServices()
         var newTargets: [Target] = []

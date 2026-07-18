@@ -16,7 +16,12 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: [.swiftLanguageMode(.v5)],
-            linkerSettings: [.linkedFramework("IOKit")]
+            linkerSettings: [.linkedFramework("IOKit")],
+            plugins: [.plugin(name: "BuildMetadata")]
+        ),
+        .plugin(
+            name: "BuildMetadata",
+            capability: .buildTool()
         ),
     ]
 )

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Installs Brightsync.app and enables its launch-at-login agent.
+# Installs Brightsync.app and starts it.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Install Brightsync.app and enable launch at login.
+Install Brightsync.app and start it.
 
-Builds the app (unless --skip-build), unregisters any previously installed
-copy, replaces it, and registers the embedded launchd agent through the new
-app (--autostart enable), which also starts it.
+Builds the app (unless --skip-build), quits any running copy, replaces it,
+and launches the new one in the background. The app registers launch at
+login itself on its first run; manage it later in Settings.
 
 Usage: scripts/install-app.sh [--app-dir <dir>] [--sign <identity>] [--skip-build] [-h|--help]
 
@@ -53,23 +53,10 @@ elif [[ ! -d dist/Brightsync.app ]]; then
 fi
 
 app="$app_dir/Brightsync.app"
+pkill -x brightsync 2> /dev/null || true
 rm -rf "$app"
 cp -R dist/Brightsync.app "$app"
+open -g "$app"
 
-# Refresh LaunchServices' record of the bundle: Background Task Management
-# resolves the agent's bundle-relative program through a bookmark that goes
-# stale when the app is replaced ("Could not find and/or execute program").
-lsregister="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-"$lsregister" -f "$app"
-
-# enable re-registers from scratch (see Autostart.swift), refreshing the
-# launch constraint Background Task Management pins to the registered binary.
-"$app/Contents/MacOS/brightsync" --autostart enable
-
-started() {
-  launchctl print "gui/$(id -u)/cz.szypowi.brightsync" 2> /dev/null | grep -q 'state = running'
-}
-for _ in 1 2 3 4 5 6 7 8; do started && break; sleep 1; done
-started || { echo "error: agent not running, check the logs" >&2; exit 1; }
 echo "installed $app"
 echo "logs: log stream --predicate 'subsystem == \"cz.szypowi.brightsync\"'"

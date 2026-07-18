@@ -1,15 +1,14 @@
 import Foundation
 import os
 
-/// Effective settings after merging defaults, the optional config file, and
-/// CLI flags (flags win).
-///
-/// The config file lives at $XDG_CONFIG_HOME/brightsync/config.json (default
-/// ~/.config/brightsync/config.json) so the daemon stays configurable when
-/// launched by launchd, where flags are impractical. Recognized keys: "min",
-/// "max", "gamma", "intervalMs", "clamshellKeys". A missing file is fine; a
-/// malformed one is a fatal error so a typo never silently reverts to
-/// defaults.
+/// Bundle identifier, defaults domain, and unified-log subsystem.
+let brightsyncID = "cz.szypowi.brightsync"
+
+/// Sync settings, read from the cz.szypowi.brightsync defaults domain. The
+/// Settings window and `defaults write cz.szypowi.brightsync ...` are the
+/// same mechanism; the AppDelegate observes the keys and applies changes
+/// live. The domain is validated as a whole and a bad value is an error, so
+/// a typo never silently reverts to defaults.
 struct Config {
     var min: Double = 0
     var max: Double = 100
@@ -17,49 +16,48 @@ struct Config {
     var intervalMs: Int = 50
     var clamshellKeys: Bool = true
 
+    static let minKey = "min"
+    static let maxKey = "max"
+    static let gammaKey = "gamma"
+    static let intervalMsKey = "intervalMs"
+    static let clamshellKeysKey = "clamshellKeys"
+    /// Shell-only setting, not part of the sync config.
+    static let showMenuBarIconKey = "showMenuBarIcon"
+
     struct ConfigError: Error, CustomStringConvertible {
         let description: String
     }
 
-    private struct FileValues: Codable {
-        var min: Double?
-        var max: Double?
-        var gamma: Double?
-        var intervalMs: Int?
-        var clamshellKeys: Bool?
+    /// The cz.szypowi.brightsync domain no matter how the binary runs: the
+    /// installed app bundle owns that identifier, so its standard defaults
+    /// already land there; an unbundled dev build (swift run) has no bundle
+    /// identifier and must address the domain explicitly.
+    static let defaults: UserDefaults =
+        Bundle.main.bundleIdentifier == brightsyncID
+            ? .standard
+            : UserDefaults(suiteName: brightsyncID) ?? .standard
+
+    /// Seeds the registration domain so unset keys read as their defaults
+    /// (for both fromDefaults and the Settings window's bindings) without
+    /// persisting anything.
+    static func registerDefaults() {
+        defaults.register(defaults: [
+            minKey: 0.0,
+            maxKey: 100.0,
+            gammaKey: 1.0,
+            intervalMsKey: 50,
+            clamshellKeysKey: true,
+            showMenuBarIconKey: true,
+        ])
     }
 
-    static func filePath() -> URL {
-        let base = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"].map(URL.init(fileURLWithPath:))
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config")
-        return base.appendingPathComponent("brightsync/config.json")
-    }
-
-    static func load(
-        min: Double?, max: Double?, gamma: Double?, intervalMs: Int?, clamshellKeys: Bool?
-    ) throws -> Config {
-        var config = Config()
-
-        let url = filePath()
-        if FileManager.default.fileExists(atPath: url.path) {
-            let values: FileValues
-            do {
-                values = try JSONDecoder().decode(FileValues.self, from: Data(contentsOf: url))
-            } catch {
-                throw ConfigError(description: "cannot parse \(url.path): \(error)")
-            }
-            config.min = values.min ?? config.min
-            config.max = values.max ?? config.max
-            config.gamma = values.gamma ?? config.gamma
-            config.intervalMs = values.intervalMs ?? config.intervalMs
-            config.clamshellKeys = values.clamshellKeys ?? config.clamshellKeys
-        }
-
-        config.min = min ?? config.min
-        config.max = max ?? config.max
-        config.gamma = gamma ?? config.gamma
-        config.intervalMs = intervalMs ?? config.intervalMs
-        config.clamshellKeys = clamshellKeys ?? config.clamshellKeys
+    static func fromDefaults() throws -> Config {
+        let config = Config(
+            min: defaults.double(forKey: minKey),
+            max: defaults.double(forKey: maxKey),
+            gamma: defaults.double(forKey: gammaKey),
+            intervalMs: defaults.integer(forKey: intervalMsKey),
+            clamshellKeys: defaults.bool(forKey: clamshellKeysKey))
 
         guard (0...100).contains(config.min), (0...100).contains(config.max), config.min < config.max else {
             throw ConfigError(description: "min/max must satisfy 0 <= min < max <= 100 (got \(config.min)/\(config.max))")
@@ -96,10 +94,10 @@ private let logTimestampFormatter: ISO8601DateFormatter = {
     return formatter
 }()
 
-private let systemLogger = Logger(subsystem: Autostart.label, category: "daemon")
+private let systemLogger = Logger(subsystem: brightsyncID, category: "daemon")
 
-/// Logs to stdout for foreground runs and to the unified log for the launchd
-/// agent, whose stdout goes nowhere. Messages are marked public - nothing
+/// Logs to stdout for foreground runs and to the unified log for the login
+/// item, whose stdout goes nowhere. Messages are marked public - nothing
 /// sensitive is logged and redacted lines are useless for debugging.
 func log(_ message: String) {
     print("\(logTimestampFormatter.string(from: Date())) \(message)")

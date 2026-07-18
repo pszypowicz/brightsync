@@ -53,10 +53,6 @@ enum BrightnessHUD {
     }
 
     private static func makePanel() -> NSPanel {
-        // Windows need NSApplication initialized; .accessory keeps the daemon
-        // out of the Dock when run as a bare binary.
-        NSApplication.shared.setActivationPolicy(.accessory)
-
         let newPanel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],

@@ -40,6 +40,22 @@ enum ClamshellKeyTap {
         }
     }
 
+    /// Removes the tap (or stops waiting for the permission) so brightness
+    /// keys pass through to macOS again; the live settings-toggle path.
+    /// Invalidating the mach port also removes its run-loop source.
+    static func stop() {
+        DispatchQueue.main.async {
+            if let observer = trustObserver {
+                DistributedNotificationCenter.default().removeObserver(observer)
+                trustObserver = nil
+            }
+            guard let port = tap else { return }
+            CFMachPortInvalidate(port)
+            tap = nil
+            log("clamshell keys: event tap removed")
+        }
+    }
+
     /// Tries to install the tap once. Returns true when the tap is active.
     @discardableResult
     private static func attempt(prompt: Bool) -> Bool {

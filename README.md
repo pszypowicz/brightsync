@@ -5,11 +5,15 @@
 Mirror the built-in display brightness of an Apple Silicon Mac to external
 displays over DDC/CI.
 
+> **Beta**: Brightsync is pre-1.0. Backward compatibility is not guaranteed
+> until version 1.0.0 is reached.
+
 Change brightness with the keyboard, Control Center, or let the ambient light
 sensor do it - every connected DDC-capable external display follows
-immediately. No menu bar app, no polling: the daemon receives the same
+immediately. A small menu bar app, no polling: it receives the same
 notification the system UI uses and pushes the mapped luminance straight to
-the display over I2C.
+the display over I2C. Settings live behind the sun icon in the menu bar
+(which you can hide); changes apply immediately.
 
 Clamshell mode is covered too: with the lid closed the daemon handles the
 brightness keys itself and shows a brightness overlay, so the keys keep
@@ -22,25 +26,26 @@ working exactly as they do on the built-in display (see
 brew install --cask pszypowicz/tap/brightsync
 ```
 
-The cask installs `Brightsync.app` and registers its launch-at-login agent
-(SMAppService) - the app appears with its icon under System Settings >
-General > Login Items & Extensions. Grant it Accessibility when prompted so
-the clamshell brightness keys work.
+Or grab the `.dmg` from the
+[latest release](https://github.com/pszypowicz/brightsync/releases/latest)
+and drag Brightsync into Applications.
+
+Either way, the app enables launch at login on its first run (visible under
+System Settings > General > Login Items & Extensions; toggle it any time in
+Settings). Grant it Accessibility when prompted so the clamshell brightness
+keys work.
 
 To build and install from source instead:
 
 ```sh
-scripts/install-app.sh --sign "<code-signing identity>"
+scripts/install-app.sh
 ```
 
-Manage launch at login any time with:
+This signs with a "Developer ID Application" identity from your keychain;
+pass `--sign <substring>` to pick another certificate, or `--sign adhoc`
+for an unsigned build.
 
-```sh
-/Applications/Brightsync.app/Contents/MacOS/brightsync --autostart status
-```
-
-(`enable` and `disable` likewise.) For a `brightsync` command on your PATH,
-symlink the app binary:
+For a `brightsync` command on your PATH, symlink the app binary:
 
 ```sh
 sudo ln -sf /Applications/Brightsync.app/Contents/MacOS/brightsync /usr/local/bin/brightsync
@@ -58,49 +63,48 @@ work.
 ## Usage
 
 ```
-brightsync                     run in the foreground
+brightsync                     run the menu bar app in the foreground
 brightsync --list              show displays and current values, then exit
 brightsync --once              sync once and exit
 brightsync --set-external 40   write luminance percent (0-100) to all
                                external displays and exit; the next
                                brightness change re-syncs over it
-brightsync --autostart status  launch at login: status, enable, disable
-                               (works from the installed app only)
 brightsync --help              all flags
 ```
 
+Opening the app while it is already running shows the Settings window - the
+escape hatch when the menu bar icon is hidden.
+
 ## Configuration
 
-Flags or `~/.config/brightsync/config.json` (flags win). The service reads
-the file at startup; restart it after editing:
+The Settings window (menu bar icon > Settings…) covers launch at login,
+hiding the menu bar icon, clamshell brightness keys, and the brightness
+mapping curve. It is a plain view over the `cz.szypowi.brightsync` defaults
+domain, so scripting works the same way and changes apply immediately, no
+restart needed:
 
 ```sh
-launchctl kickstart -k gui/$UID/cz.szypowi.brightsync
+defaults write cz.szypowi.brightsync min -float 10
+defaults write cz.szypowi.brightsync gamma -float 1.4
 ```
 
-```json
-{
-  "min": 10,
-  "max": 100,
-  "gamma": 1.4,
-  "intervalMs": 50,
-  "clamshellKeys": true
-}
-```
+Inspect with `defaults read cz.szypowi.brightsync`, reset a key with
+`defaults delete cz.szypowi.brightsync <key>`. The keys:
 
-- `min` / `max` - external luminance range (0-100) mapped to internal
-  brightness 0..1. Raise `min` if the external display gets too dark at the
-  low end.
-- `gamma` - curve exponent applied to the internal brightness before mapping.
-  Values above 1 keep the external display dimmer in the midrange; below 1
-  keep it brighter.
-- `intervalMs` - minimum gap between DDC writes. Brightness changes arrive in
-  bursts (macOS ramps smoothly), so writes are coalesced to the most recent
-  value at this rate. Raise it if your display is flaky under rapid DDC
-  traffic.
-- `clamshellKeys` - handle the brightness keys while the lid is closed
-  (default `true`, see [Clamshell mode](#clamshell-mode)). Set to `false` or
-  pass `--no-clamshell-keys` to disable.
+- `min` / `max` (`-float`) - external luminance range (0-100) mapped to
+  internal brightness 0..1. Raise `min` if the external display gets too
+  dark at the low end.
+- `gamma` (`-float`) - curve exponent applied to the internal brightness
+  before mapping. Values above 1 keep the external display dimmer in the
+  midrange; below 1 keep it brighter.
+- `intervalMs` (`-int`) - minimum gap between DDC writes. Brightness changes
+  arrive in bursts (macOS ramps smoothly), so writes are coalesced to the
+  most recent value at this rate. Raise it if your display is flaky under
+  rapid DDC traffic. No UI - defaults only.
+- `clamshellKeys` (`-bool`) - handle the brightness keys while the lid is
+  closed (default `true`, see [Clamshell mode](#clamshell-mode)).
+- `showMenuBarIcon` (`-bool`) - show the sun icon in the menu bar (default
+  `true`).
 
 ## Clamshell mode
 
@@ -117,9 +121,10 @@ straight back to macOS.
 - Requires the Accessibility permission (System Settings > Privacy &
   Security > Accessibility). The daemon prompts on first start and picks the
   grant up the moment it is made; everything else works without it.
-- Build from source with a stable code-signing identity
-  (`scripts/install-app.sh --sign "<identity>"`, e.g. a Developer ID or a
-  self-signed code-signing certificate).
+- When building from source, sign with a stable identity (the default
+  Developer ID, or a self-signed code-signing certificate) - macOS ties the
+  Accessibility grant to the signature, so ad-hoc rebuilds have to be
+  re-approved every time.
 - If a display macOS controls natively is online (Apple Studio Display, Pro
   Display XDR), key presses are passed through even in clamshell so native
   control keeps working.
