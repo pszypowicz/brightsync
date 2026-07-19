@@ -45,11 +45,12 @@ This signs with a "Developer ID Application" identity from your keychain;
 pass `--sign <substring>` to pick another certificate, or `--sign adhoc`
 for an unsigned build.
 
-For a `brightsync` command on your PATH, symlink the app binary:
-
-```sh
-sudo ln -sf /Applications/BrightSync.app/Contents/MacOS/BrightSync /usr/local/bin/brightsync
-```
+The app executable doubles as the `brightsync` command. A Homebrew install
+puts it on your PATH for you (and `brew uninstall` takes it away again). If
+you dragged the app in from the DMG instead, open Settings (menu bar icon >
+Settings…) and use **Command-Line Tool > Install** - it symlinks
+`brightsync` into `/opt/homebrew/bin` or `~/.local/bin`, so no `sudo`. The
+same button removes it.
 
 The daemon logs to the unified log:
 

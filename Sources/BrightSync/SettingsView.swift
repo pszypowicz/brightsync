@@ -50,11 +50,14 @@ struct SettingsView: View {
     @AppStorage(Config.gammaKey, store: Config.defaults) private var gamma = 1.0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var accessibilityGranted = AXIsProcessTrusted()
+    @State private var cliLink = CommandLineTool.installedLink()
+    @State private var cliError: String?
 
     var body: some View {
         Form {
             generalSection
             mappingSection
+            commandLineSection
         }
         .formStyle(.grouped)
         .frame(width: 420)
@@ -124,6 +127,28 @@ struct SettingsView: View {
         }
     }
 
+    private var commandLineSection: some View {
+        Section("Command-Line Tool") {
+            HStack(spacing: 4) {
+                Label("brightsync command", systemImage: "terminal")
+                InfoDot("Puts a 'brightsync' command on your PATH (a symlink in /opt/homebrew/bin or ~/.local/bin) for running brightsync --list, --set-external, and the other flags from a terminal. No password needed. Installed for you already if you got BrightSync via Homebrew.")
+                Spacer()
+                Button(cliLink == nil ? "Install" : "Uninstall") { toggleCommandLineTool() }
+                    .controlSize(.small)
+            }
+            if let cliLink {
+                Text("Installed at \(cliLink.path)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let cliError {
+                Text(cliError)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
     private func slider(
         _ title: String, value: Binding<Double>, in range: ClosedRange<Double>,
         step: Double, display: String, info: String
@@ -144,6 +169,24 @@ struct SettingsView: View {
     private func refreshExternalState() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         accessibilityGranted = AXIsProcessTrusted()
+        // Homebrew (or a terminal) is a second writer of the CLI link, so
+        // re-read it rather than trusting the last in-app action.
+        cliLink = CommandLineTool.installedLink()
+    }
+
+    private func toggleCommandLineTool() {
+        cliError = nil
+        do {
+            if cliLink == nil {
+                cliLink = try CommandLineTool.install()
+            } else {
+                try CommandLineTool.uninstall()
+                cliLink = nil
+            }
+        } catch {
+            cliError = error.localizedDescription
+            cliLink = CommandLineTool.installedLink()
+        }
     }
 
     private func setLaunchAtLogin(_ enable: Bool) {
