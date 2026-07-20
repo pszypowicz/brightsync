@@ -21,7 +21,10 @@ working exactly as they do on the built-in display (see
 [Clamshell mode](#clamshell-mode)).
 
 <p align="center">
-  <img src="Resources/images/how-it-works.svg" width="830" alt="Animation: a laptop and an external display kept at the same brightness - a brightness key on the laptop drives both, and the ambient light sensor drives both together">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Resources/images/how-it-works-dark.svg">
+    <img src="Resources/images/how-it-works-light.svg" width="830" alt="Animation: a laptop and an external display kept at the same brightness - a brightness key on the laptop drives both, and the ambient light sensor drives both together">
+  </picture>
 </p>
 
 ## Install
