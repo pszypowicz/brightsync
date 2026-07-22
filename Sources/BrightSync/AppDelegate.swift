@@ -1,14 +1,10 @@
 import AppKit
-import ServiceManagement
 
 /// App lifecycle for the menu bar app: owns the status item, starts the sync
 /// engine and its watchers, applies settings changes live, and opens the
 /// Settings window on reopen - the escape hatch when the menu bar icon is
 /// hidden.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// First-launch guard for the one-time launch-at-login registration.
-    static let didRegisterLoginItemKey = "didRegisterLoginItem"
-
     /// Keys that feed the engine or the shell, observed for live application.
     private static let observedKeys = [
         Config.minKey, Config.maxKey, Config.gammaKey, Config.intervalMsKey,
@@ -29,7 +25,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
-        registerLoginItemOnFirstLaunch()
 
         engine.start()
         engine.registerForNotifications()
@@ -82,23 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ClamshellKeyTap.start(verbose: verbose)
         } else {
             ClamshellKeyTap.stop()
-        }
-    }
-
-    /// BrightSync is useless unless it runs, so the first launch of the
-    /// installed app opts into launch at login (macOS shows its standard
-    /// notification); the Settings toggle rules afterwards. Dev builds run
-    /// unbundled and must not register themselves as login items.
-    private func registerLoginItemOnFirstLaunch() {
-        guard Bundle.main.bundleIdentifier == brightsyncID,
-            !Config.defaults.bool(forKey: Self.didRegisterLoginItemKey)
-        else { return }
-        Config.defaults.set(true, forKey: Self.didRegisterLoginItemKey)
-        do {
-            try SMAppService.mainApp.register()
-            log("launch at login enabled (first launch)")
-        } catch {
-            log("launch at login registration failed: \(error)")
         }
     }
 

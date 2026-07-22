@@ -7,8 +7,8 @@ usage() {
 Install BrightSync.app and start it.
 
 Builds the app (unless --skip-build), quits any running copy, replaces it,
-and launches the new one in the background. The app registers launch at
-login itself on its first run; manage it later in Settings.
+and launches the new one in the background. Launch at login is managed in
+the app's Settings (or System Settings > Login Items & Extensions).
 
 Usage: scripts/install-app.sh [--app-dir <dir>] [--sign <identity>] [--skip-build] [-h|--help]
 
