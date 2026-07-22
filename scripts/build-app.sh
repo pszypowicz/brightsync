@@ -47,6 +47,17 @@ swift build -c release
 binary=".build/release/BrightSync"
 version="$("$binary" --version)"
 
+# The version is compiled in by the BuildMetadata prebuild plugin, whose
+# output can survive a VERSION bump in a warm build directory - the binary
+# then reports (and ships) the previous version. The packaged app must
+# match the VERSION file.
+expected="$(head -1 VERSION | tr -d '[:space:]')"
+if [[ "$version" != "$expected" ]]; then
+  echo "error: binary reports version $version but VERSION says $expected" >&2
+  echo "Stale build metadata; run 'swift package clean' and rebuild." >&2
+  exit 1
+fi
+
 app="$output/BrightSync.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
