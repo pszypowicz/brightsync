@@ -37,10 +37,10 @@ Or grab the `.dmg` from the
 [latest release](https://github.com/pszypowicz/BrightSync/releases/latest)
 and drag BrightSync into Applications.
 
-Either way, the app enables launch at login on its first run (visible under
-System Settings > General > Login Items & Extensions; toggle it any time in
-Settings). Grant it Accessibility when prompted so the clamshell brightness
-keys work.
+Either way, enable launch at login with the toggle in Settings (or under
+System Settings > General > Login Items & Extensions - both control the same
+macOS-managed state). Grant the app Accessibility when prompted so the
+clamshell brightness keys work.
 
 To build and install from source instead:
 
